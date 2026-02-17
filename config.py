@@ -11,8 +11,8 @@ class Config:
     # Ingestion mode
     # IMPORTANT: yfinance obtains data via Yahoo web endpoints; there is no fully-offline mode without
     # pre-downloaded local data. When offline_mode=True, the pipeline will ONLY read from local cache/DB.
-    offline_mode: bool = False
-    allow_network: bool = True  # when False, the pipeline will never call yfinance network functions.
+    offline_mode: bool = True
+    allow_network: bool = False  # when False, the pipeline will never call yfinance network functions.
 
     # Universe build
     include_etfs: bool = True
