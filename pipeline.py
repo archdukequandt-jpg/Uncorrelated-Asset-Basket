@@ -193,37 +193,92 @@ def run_pipeline(config: Config, seed_symbols: List[str] | None = None) -> Dict:
     # For simplicity, compute returns from in-memory price frames when available, else read from DB.
     # We'll read adj_close series for all universe symbols from DB to ensure completeness.
     log("Loading prices from DB for returns alignment...")
-    price_series = {}
+    returns = {}
+
+    # Try adj_close first; fall back to close if adj_close is missing/NULL
     with conn:
         for sym in universe_symbols:
             cur = conn.execute(
-                "SELECT date, adj_close FROM prices_daily WHERE symbol=? ORDER BY date;",
+                "SELECT date, adj_close, close FROM prices_daily WHERE symbol=? ORDER BY date;",
                 (sym,)
             )
             rows = cur.fetchall()
             if not rows:
                 continue
+
+            adj = [r[1] for r in rows]
+            clo = [r[2] for r in rows]
+            use = adj if any(v is not None for v in adj) else clo
+
             s = pd.Series(
-                [r[1] for r in rows],
+                use,
                 index=pd.to_datetime([r[0] for r in rows]),
                 name=sym
             ).dropna()
-            if len(s) < config.lookback_days:
+
+            # require some minimum to even be useful
+            if len(s) < 30:
                 continue
-            df = pd.DataFrame({"adj_close": s})
+
+            df = pd.DataFrame({"adj_close": s})  # compute_returns expects adj_close column name
             ret = compute_returns(df, config.return_type)
-            returns[sym] = ret
+            if ret is not None and len(ret) > 0:
+                returns[sym] = ret
+
+    if not returns:
+        raise RuntimeError(
+            "No usable price history found in DB. "
+            "Ensure prices_daily has rows and contains adj_close or close."
+        )
+
+    lengths = {sym: len(r) for sym, r in returns.items()}
+    available_syms = sorted(lengths.keys(), key=lambda s: lengths[s], reverse=True)
+
+    # If fewer symbols than requested basket size, shrink basket size (keep >= 3)
+    min_basket = 3
+    if len(available_syms) < config.basket_size:
+        new_k = max(min_basket, len(available_syms))
+        log(f"WARNING: Only {len(available_syms)} symbols have returns. Reducing basket_size {config.basket_size} -> {new_k}.")
+        config.basket_size = new_k
+
+    if len(available_syms) < config.basket_size:
+        raise RuntimeError(
+            f"Not enough symbols with returns to build basket of {config.basket_size}. "
+            "Add more symbols/prices to DB or cached CSVs."
+        )
+
+    # Choose the largest lookback that still supports basket_size symbols
+    kth_len = sorted(lengths.values(), reverse=True)[config.basket_size - 1]
+    effective_lookback = min(int(config.lookback_days), int(kth_len))
+
+    # Don't collapse too far
+    min_lookback = 30
+    if effective_lookback < min_lookback:
+        raise RuntimeError(
+            f"Only {kth_len} rows available for the {config.basket_size}-th symbol, "
+            f"which is below minimum lookback {min_lookback}. "
+            "Add more data or allow network."
+        )
+
+    if effective_lookback != config.lookback_days:
+        log(f"WARNING: Insufficient history for requested lookback. Using lookback_days {config.lookback_days} -> {effective_lookback}.")
+        config.lookback_days = effective_lookback
 
     ret_df = align_returns(returns, config.lookback_days)
     universe_symbols = list(ret_df.columns)
+
     log(f"Aligned returns shape: {ret_df.shape} (symbols: {len(universe_symbols)})")
     if len(universe_symbols) < config.basket_size:
-        raise RuntimeError(
-            f"Not enough symbols with sufficient data to build basket of {config.basket_size}. "
-            f"Tip: add cached CSVs under {config.cache_dir}/prices/ or set allow_network=True."
-        )
+        new_k = max(min_basket, len(universe_symbols))
+        log(f"WARNING: After alignment only {len(universe_symbols)} symbols remain. Reducing basket_size -> {new_k}.")
+        config.basket_size = new_k
 
-    corr = corr_matrix(ret_df, method=config.corr_method)
+    if len(universe_symbols) < config.basket_size:
+        raise RuntimeError(
+            f"Not enough symbols after alignment to build basket of {config.basket_size}. "
+            "Add more data to DB or cache."
+        )
+corr = corr_matrix(ret_df, method=config.corr_method)
 
     # Snapshot universe
     criteria = {

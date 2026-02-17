@@ -8,7 +8,13 @@ from pathlib import Path
 import pandas as pd
 
 try:
+    try:
     import yfinance as yf
+    HAS_YF = True
+except Exception:
+    yf = None
+    HAS_YF = False
+
 except Exception:
     yf = None
 from logging_utils import log
@@ -76,6 +82,9 @@ def _require_yfinance():
         raise ImportError("yfinance is required. Install with: pip install yfinance")
 
 def fetch_metadata_yf(symbols: List[str], min_delay_s: float = 0.3) -> List[AssetMeta]:
+
+    if not HAS_YF:
+            raise RuntimeError('yfinance is not installed. Install yfinance or run with offline_mode=True.')
     """Network-based metadata fetch (may be rate-limited by Yahoo)."""
     _require_yfinance()
     metas: List[AssetMeta] = []
@@ -135,6 +144,9 @@ def fetch_metadata_yf(symbols: List[str], min_delay_s: float = 0.3) -> List[Asse
     return metas
 
 def download_prices_yf(symbols: List[str], start: str, end: str, threads: bool = False) -> pd.DataFrame:
+
+    if not HAS_YF:
+            raise RuntimeError('yfinance is not installed. Install yfinance or run with offline_mode=True.')
     _require_yfinance()
     return yf.download(
         tickers=" ".join(symbols),
