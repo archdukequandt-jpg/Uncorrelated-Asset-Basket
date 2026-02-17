@@ -1,4 +1,6 @@
 # Uncorrelated Basket Finder (SQLite + Jupyter) — v3
+# https://uncorrelated-asset-basket.streamlit.app/
+Note: to run using the browser app, start by deselecting offline mode and allowing network
 
 This project builds/uses a local SQLite database of asset metadata + daily prices, computes returns/correlation,
 and searches for a 30-asset basket with minimal pairwise correlations (mean absolute correlation),
